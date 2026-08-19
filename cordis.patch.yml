@@ -1,0 +1,5 @@
+# shl-session-history 插件注册：挂载到 desktop profile
+
+- insert:
+    - id: shl-session-history
+      name: 'shl-session-history'

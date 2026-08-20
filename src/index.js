@@ -27,6 +27,7 @@ class ShlService extends TypertRemoteService {
 
   constructor(ctx, config) {
     super(ctx, 'shl')
+    this._historyCache = null
     for (const init of ShlService.remoteInitializers) init.call(this)
   }
 
@@ -51,31 +52,9 @@ class ShlService extends TypertRemoteService {
     return this.extractTextFromBlocks(evt.data?.content)
   }
 
-  extractAiContent(evt) {
-    if (!evt || evt.type !== 'assistant/message') return null
-    return this.extractTextFromBlocks(evt.data?.message?.content)
-  }
-
   isUserEvent(evt) {
     if (!evt || evt.type !== 'user/message') return false
     return evt.data && evt.data.source && evt.data.source.kind === 'user'
-  }
-
-  isAiEvent(evt) {
-    return evt.type === 'assistant/message'
-  }
-
-  formatTime(timestamp) {
-    if (!timestamp) return ''
-    try {
-      const d = new Date(Number(timestamp))
-      if (isNaN(d.getTime())) return ''
-      const h = d.getHours().toString().padStart(2, '0')
-      const m = d.getMinutes().toString().padStart(2, '0')
-      return h + ':' + m
-    } catch {
-      return ''
-    }
   }
 
   // ── 当前会话 ────────────────────────────────────────────────────
@@ -118,6 +97,18 @@ class ShlService extends TypertRemoteService {
     return this.currentSessionId
   }
 
+  // live 会话可 O(1) 取事件数（无需克隆/落盘），用于增量判断
+  _getLiveEventCount(sessionId) {
+    try {
+      const sessions = this.ctx.get('sessions')
+      if (sessions && typeof sessions.get === 'function') {
+        const s = sessions.get(sessionId)
+        if (s && Array.isArray(s.events)) return s.events.length
+      }
+    } catch {}
+    return null
+  }
+
   // ── Remote 方法：获取会话历史请求列表 ────────────────────────────
   async getHistory(request) {
     const requestedSessionId = request && request.sessionId ? request.sessionId : null
@@ -125,24 +116,36 @@ class ShlService extends TypertRemoteService {
     const sessionId = requestedSessionId || resolved
     const sessionQuery = this.sessionQuery
     const debug = {
-      clientSessionId: request && request.sessionId ? request.sessionId : null,
+      clientSessionId: requestedSessionId,
       resolvedSessionId: sessionId,
       currentSessionId: this.currentSessionId,
       sessionQueryExists: !!sessionQuery,
       eventCount: -1,
       sampleTypes: [],
+      cached: false,
       err: null
     }
     if (!sessionId) return { items: [], sessionId: null, error: 'no session', debug }
     if (!sessionQuery) return { items: [], sessionId, error: 'sessionQuery unavailable', debug }
     try {
+      // 增量：live 会话事件数未变化时直接复用缓存，跳过 readSession 与全量重扫
+      const liveCount = this._getLiveEventCount(sessionId)
+      if (
+        this._historyCache &&
+        this._historyCache.sessionId === sessionId &&
+        liveCount !== null &&
+        this._historyCache.eventCount === liveCount
+      ) {
+        debug.eventCount = liveCount
+        debug.cached = true
+        return { items: this._historyCache.items, sessionId, debug }
+      }
       const { events } = await sessionQuery.readSession(sessionId)
       debug.eventCount = Array.isArray(events) ? events.length : -1
       debug.sampleTypes = (events || []).slice(0, 6).map((e) => (e && e.type) || typeof e)
       const items = []
       if (Array.isArray(events)) {
         let turnIndex = 0
-        let awaitingAiResponse = false
         for (let i = 0; i < events.length; i++) {
           const evt = events[i]
           if (this.isUserEvent(evt)) {
@@ -150,29 +153,14 @@ class ShlService extends TypertRemoteService {
             if (content) {
               items.push({
                 index: turnIndex,
-                summary: content.length > 80 ? content.slice(0, 80) + '...' : content,
-                fullUser: content,
-                fullAi: '',
-                time: this.formatTime(evt.time),
-                eventSeq: i,
-                awaitingAi: true
+                summary: content.length > 200 ? content.slice(0, 200) + '...' : content
               })
               turnIndex++
-              awaitingAiResponse = true
-            }
-          } else if (awaitingAiResponse && items.length > 0 && this.isAiEvent(evt)) {
-            const aiContent = this.extractAiContent(evt)
-            if (aiContent) {
-              const lastItem = items[items.length - 1]
-              if (lastItem && lastItem.awaitingAi) {
-                lastItem.fullAi = aiContent.length > 300 ? aiContent.slice(0, 300) + '...' : aiContent
-                lastItem.awaitingAi = false
-                awaitingAiResponse = false
-              }
             }
           }
         }
       }
+      this._historyCache = { sessionId, eventCount: debug.eventCount, items }
       return { items, sessionId, debug }
     } catch (err) {
       debug.err = String(err)

@@ -34,6 +34,14 @@ plugin-shl/
 dsh plugin --profile desktop add /path/to/plugin-shl
 ```
 
+## 依赖说明（重要）
+
+本插件是 **bundle 插件**，`@deepseek-ai/*` peer 依赖由 DeepSeek Harness 主应用运行时提供，**通过插件管理器安装时无需 `npm install`**，请勿在插件目录手动重装依赖（会破坏与主应用 runtime 的版本对齐）。
+
+- 不提供 `package-lock.json`：registry 上 `@deepseek-ai` 各 rc 版本间的 peer 依赖组合互相冲突（实测标准 `npm install` 报 ERESOLVE，无法独立解析整棵依赖树）。
+- 独立开发时可尝试 `npm install --legacy-peer-deps`，但解析出的版本组合可能与主应用 runtime 不一致，运行时以主应用实际提供的版本为准。
+- 升级主应用后，建议重新加载本插件并做一次 RPC 冒烟验证（三个远程方法可被 client 调用，见 `src/index.js` 头部注释）。
+
 ## 架构
 
 - **Host 端** (`src/index.js`)：`ShlService extends TypertRemoteService`，通过 `super(ctx, 'shl')` 注册服务；用纯 JS 手动调用 `Remote('method')` 等价于 `@Remote()` 装饰器（Node 24 默认不支持 decorator 语法），标记 `getHistory` / `navigateToTurn` / `getCurrentSession` 三个远程方法。数据源：`sessionQuery.readSession(sessionId)` 读取完整事件（含 `data`），按事件 `source.kind === 'user'` 过滤出真实用户请求。

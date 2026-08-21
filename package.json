@@ -1,7 +1,7 @@
 {
   "name": "shl-session-history",
   "version": "1.0.0",
-  "description": "会话历史请求定位器：在桌面客户端侧边栏添加历史请求列表面板，点击可跳转到对应对话位置",
+  "description": "会话历史请求迷你滑轨：对话区左侧垂直居中的短横线，悬停显示请求摘要，点击跳转到对应对话位置",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -33,7 +33,7 @@
   "peerDependencies": {
     "react": "^18.2.0",
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-typert-protocol": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-typert-protocol": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.7",

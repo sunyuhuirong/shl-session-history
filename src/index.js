@@ -6,6 +6,12 @@ const name = 'shl-session-history'
  * 纯 JS 手动应用 `@Remote()` 装饰器（Node 24 默认不支持 decorator 语法）。
  * 构造一个与 TC39 装饰器 context 等价的假 context，收集 addInitializer 回调，
  * 再以真实原型上的实例为 `this` 执行回调，使 `mark()` 写入 markers WeakMap。
+ *
+ * ⚠️ 协议依赖约束：本实现依赖 @deepseek-ai/dsh-typert-protocol 内部约定
+ * （`addMarkerInitializer` 通过标准 `context.addInitializer` 注册标记写入）。
+ * 升级该包后必须做一次 RPC 冒烟验证（getHistory / navigateToTurn / getCurrentSession
+ * 可被 client 远程调用），若协议包调整内部实现，本 hack 会静默失效（不报错）。
+ * 当前对齐版本：^0.1.1-rc.2（见 package.json peerDependencies）。
  */
 function collectRemoteInitializer(methodName) {
   const initializers = []
@@ -178,15 +184,17 @@ class ShlService extends TypertRemoteService {
     try {
       const { events } = await sessionQuery.readSession(targetSession)
       if (!Array.isArray(events)) return { ok: false, error: 'no events' }
+      // 轮次口径必须与 getHistory 一致：仅统计「真实用户 + 文本内容非空」的事件，
+      // 否则会话中存在无文本用户事件（如仅发图片/附件）时索引会错位。
       let userCount = 0
       for (let i = 0; i < events.length; i++) {
         const evt = events[i]
-        if (this.isUserEvent(evt)) {
-          if (userCount === turnIndex) {
-            return { ok: true, eventSeq: i, turnIndex }
-          }
-          userCount++
+        if (!this.isUserEvent(evt)) continue
+        if (!this.extractUserContent(evt)) continue
+        if (userCount === turnIndex) {
+          return { ok: true, eventSeq: i, turnIndex }
         }
+        userCount++
       }
       return { ok: false, error: 'turn not found' }
     } catch (err) {

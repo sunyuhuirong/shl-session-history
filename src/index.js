@@ -24,8 +24,11 @@ export const ShlSettingsSchema = z.object({
  * 可被 client 远程调用），若协议包调整内部实现，本 hack 会静默失效（不报错）。
  * 当前对齐版本：^0.1.1-rc.2（见 package.json peerDependencies）。
  *
- * 注意：host 端保持最小依赖（仅 dsh-typert-protocol）。设置（开关/样式）为纯
- * client 端行为，存于浏览器 localStorage，不经过 host，避免 host 引入额外依赖。
+ * 设置架构：host 端经 ctx.inject(['settings']) 注册 settings namespace
+ * 'shl-session-history'（schema 见 ShlSettingsSchema），供设置页「插件配置」
+ * tab 渲染配置卡片；client 端以 scope 为单源并镜像到 localStorage，rail
+ * 渲染层从本地存储读取。注册与绑定均有容错包裹：settings 服务缺失的环境
+ * 静默降级为纯 localStorage 模式，不影响核心 RPC 与滑轨功能。
  */
 function collectRemoteInitializer(methodName) {
   const initializers = []
@@ -50,13 +53,23 @@ class ShlService extends TypertRemoteService {
     this._historyCache = null
     // 注册 settings namespace，让 ConfigurablePluginsTab 把本插件认作可服务
     // 的 namespace，settings.plugin.item 卡片才会被渲染。
-    ctx.inject(['settings'], (settingsCtx) => {
-      settingsCtx.settings.register(
-        settingsNamespace('shl-session-history'),
-        ShlSettingsSchema,
-        { base: { enabled: true, railStyle: 'bar', autoHide: true } }
-      )
-    })
+    // 容错：settings 服务不可用或注册失败时静默降级（仅 warn），
+    // 不阻塞服务构造，核心 RPC 不受影响。
+    try {
+      ctx.inject(['settings'], (settingsCtx) => {
+        try {
+          settingsCtx.settings.register(
+            settingsNamespace('shl-session-history'),
+            ShlSettingsSchema,
+            { base: { enabled: true, railStyle: 'bar', autoHide: true } }
+          )
+        } catch (err) {
+          console.warn('[shl] settings namespace registration skipped:', err && err.message ? err.message : err)
+        }
+      })
+    } catch (err) {
+      console.warn('[shl] settings inject unavailable:', err && err.message ? err.message : err)
+    }
     for (const init of ShlService.remoteInitializers) init.call(this)
   }
 

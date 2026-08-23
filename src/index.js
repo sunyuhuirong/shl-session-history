@@ -1,6 +1,16 @@
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import z from '@deepseek-ai/schemastery'
 
 const name = 'shl-session-history'
+
+/** Settings schema for the host-side namespace the plugin registers.
+ *  Exported so a test, an authoring script, or a sibling plugin can validate
+ *  user documents offline; the runtime layer is owned by the service below. */
+export const ShlSettingsSchema = z.object({
+  enabled: z.boolean().default(true),
+  railStyle: z.union(['bar', 'dot']).default('bar')
+})
 
 /**
  * 纯 JS 手动应用 `@Remote()` 装饰器（Node 24 默认不支持 decorator 语法）。
@@ -12,6 +22,9 @@ const name = 'shl-session-history'
  * 升级该包后必须做一次 RPC 冒烟验证（getHistory / navigateToTurn / getCurrentSession
  * 可被 client 远程调用），若协议包调整内部实现，本 hack 会静默失效（不报错）。
  * 当前对齐版本：^0.1.1-rc.2（见 package.json peerDependencies）。
+ *
+ * 注意：host 端保持最小依赖（仅 dsh-typert-protocol）。设置（开关/样式）为纯
+ * client 端行为，存于浏览器 localStorage，不经过 host，避免 host 引入额外依赖。
  */
 function collectRemoteInitializer(methodName) {
   const initializers = []
@@ -34,6 +47,15 @@ class ShlService extends TypertRemoteService {
   constructor(ctx, config) {
     super(ctx, 'shl')
     this._historyCache = null
+    // 注册 settings namespace，让 ConfigurablePluginsTab 把本插件认作可服务
+    // 的 namespace，settings.plugin.item 卡片才会被渲染。
+    ctx.inject(['settings'], (settingsCtx) => {
+      settingsCtx.settings.register(
+        settingsNamespace('shl-session-history'),
+        ShlSettingsSchema,
+        { base: { enabled: true, railStyle: 'bar' } }
+      )
+    })
     for (const init of ShlService.remoteInitializers) init.call(this)
   }
 

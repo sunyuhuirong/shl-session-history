@@ -9,7 +9,8 @@ const name = 'shl-session-history'
  *  user documents offline; the runtime layer is owned by the service below. */
 export const ShlSettingsSchema = z.object({
   enabled: z.boolean().default(true),
-  railStyle: z.union(['bar', 'dot']).default('bar')
+  railStyle: z.union(['bar', 'dot']).default('bar'),
+  autoHide: z.boolean().default(true)
 })
 
 /**
@@ -53,7 +54,7 @@ class ShlService extends TypertRemoteService {
       settingsCtx.settings.register(
         settingsNamespace('shl-session-history'),
         ShlSettingsSchema,
-        { base: { enabled: true, railStyle: 'bar' } }
+        { base: { enabled: true, railStyle: 'bar', autoHide: true } }
       )
     })
     for (const init of ShlService.remoteInitializers) init.call(this)

@@ -1,6 +1,6 @@
 {
   "name": "shl-session-history",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "会话历史请求迷你滑轨：对话区左侧垂直居中的短横线，悬停显示请求摘要，点击跳转到对应对话位置",
   "type": "module",
   "main": "src/index.js",

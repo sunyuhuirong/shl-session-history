@@ -47,6 +47,20 @@ dsh plugin --profile desktop add /path/to/plugin-shl
 - 独立开发时可尝试 `npm install --legacy-peer-deps`，但解析出的版本组合可能与主应用 runtime 不一致，运行时以主应用实际提供的版本为准。
 - 升级主应用后，建议重新加载本插件并做一次 RPC 冒烟验证（三个远程方法可被 client 调用，见 `src/index.js` 头部注释）。
 
+## 截图
+
+| 截图 | 说明 |
+|------|------|
+| ![会话滑轨概览](docs/screenshots/01-overview.png) | 侧边栏会话列表中滑轨以横线形式显示各历史请求，悬停变长并弹出摘要。 |
+| ![设置面板](docs/screenshots/02-settings-panel.png) | 插件配置卡片：开关 / 样式切换 / 间距与长度微调均在「设置 → 插件」页完成，改完即时生效并本地持久化。 |
+| ![圆点模式](docs/screenshots/03-rail-dot-mode.png) | 切换到圆点样式后，滑轨变为竖向圆点，大小随会话新旧渐淡；悬停时胶囊变长（可调长度）。 |
+
+## 版本历史
+
+- **v1.1.1**（2025-08-24）：修复切换会话后「间距 / 圆点大小」设置失效的 bug（内核 `StrictSessionEntry` 以 `key=sessionId` 重挂载插槽内容，挂载时未写入 CSS 变量；现改为挂载后立即调用 `applySettingsToNode()`，确保尺寸变量在每次新会话中正确应用）。
+- **v1.1.0**（2025-08-24）：新增设置卡片尺寸微调（间距 / 圆点大小 / 胶囊长度 / 横线长度）、更新入口、版本号显示。
+- **v1.0.0**：初始版本，基础滑轨功能。
+
 ## 架构
 
 - **Host 端** (`src/index.js`)：`ShlService extends TypertRemoteService`，通过 `super(ctx, 'shl')` 注册服务；用纯 JS 手动调用 `Remote('method')` 等价于 `@Remote()` 装饰器（Node 24 默认不支持 decorator 语法），标记 `getHistory` / `navigateToTurn` / `getCurrentSession` 三个远程方法。数据源：`sessionQuery.readSession(sessionId)` 读取完整事件（含 `data`），按事件 `source.kind === 'user'` 过滤出真实用户请求。同时注入 `settings` 服务，注册 settings namespace `shl-session-history`（schema: `{ enabled: bool = true, railStyle: 'bar'|'dot' = 'bar' }`），让设置页「插件配置」tab 把本插件认作可配置的已 serve namespace。

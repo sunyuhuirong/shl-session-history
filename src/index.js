@@ -1,6 +1,52 @@
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+import { realpathSync, readFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+
+const GITHUB_REPO = 'sunyuhuirong/shl-session-history'
+const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
+
+/** 解符号链接得到插件真实源目录（符号链接 → ~/Desktop/deepseek-harness/plugin-shl）。
+ *  host 加载的是 src/index.js，其父目录即插件根。realpathSync 解析符号链接，
+ *  使后续的 git pull 作用在真实源目录而非 profile 内 node_modules 的软链上。 */
+function getPluginSourceDir() {
+  try {
+    return realpathSync(__dirname).replace(/[/\\]src$/, '')
+  } catch {
+    return __dirname.replace(/[/\\]src$/, '')
+  }
+}
+
+function readVersion(dir) {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+    return pkg.version || '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
+/** 语义化版本比较：a>b 返回 1，a<b 返回 -1，相等返回 0（仅比数字段）。 */
+function compareVersion(a, b) {
+  const pa = String(a || '0').split('.').map((x) => parseInt(x, 10) || 0)
+  const pb = String(b || '0').split('.').map((x) => parseInt(x, 10) || 0)
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i++) {
+    const x = pa[i] || 0
+    const y = pb[i] || 0
+    if (x > y) return 1
+    if (x < y) return -1
+  }
+  return 0
+}
 
 const name = 'shl-session-history'
 
@@ -247,12 +293,110 @@ class ShlService extends TypertRemoteService {
   async getCurrentSession() {
     return { sessionId: await this.resolveSessionId() }
   }
+
+  // ── Remote 方法：读取当前版本号 ──────────────────────────────────
+  // 不联网——直接读 plugin 真实源目录的 package.json#version，供客户端
+  // 在设置卡片标题中显示"会话滑轨 v1.0.0"，与「插件市场」卡片对齐样式。
+  async getVersion() {
+    return { version: readVersion(getPluginSourceDir()) }
+  }
+
+  // ── Remote 方法：检查更新 ────────────────────────────────────────
+  // 拉取 GitHub Releases latest，与本地 package.json#version 比对。
+  // 返回 { current, latest, releaseUrl, updateAvailable, error }。
+  async checkForUpdate() {
+    const current = readVersion(getPluginSourceDir())
+    try {
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), 5000)
+      const res = await fetch(GITHUB_API, {
+        signal: ctrl.signal,
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'shl-session-history'
+        }
+      })
+      clearTimeout(timer)
+      if (res.status === 404) {
+        // 仓库尚未发布过 release → 视为已是最新（latest 与 current 相等）
+        return { current, latest: current, releaseUrl: null, updateAvailable: false, error: null }
+      }
+      if (!res.ok) {
+        return { current, latest: null, releaseUrl: null, updateAvailable: false, error: `GitHub API ${res.status}` }
+      }
+      const data = await res.json()
+      const latest = String(data.tag_name || '').replace(/^v/i, '') || current
+      const updateAvailable = compareVersion(latest, current) > 0
+      return { current, latest, releaseUrl: data.html_url || null, updateAvailable, error: null }
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err)
+      return { current, latest: null, releaseUrl: null, updateAvailable: false, error: msg }
+    }
+  }
+
+  // ── Remote 方法：执行更新 ────────────────────────────────────────
+  // 在插件真实源目录（解符号链接后）跑 git pull --ff-only；若 package.json
+  // 在 pull 前后有变化则补跑 npm install。返回 { ok, dir, before, after, output, installOut, error }。
+  // ⚠️ 不可逆：会改写源目录工作区（未跟踪文件保留，已修改文件可能被 fast-forward 覆盖）。
+  async applyUpdate() {
+    const dir = getPluginSourceDir()
+    const before = readVersion(dir)
+    try {
+      await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: dir, timeout: 10000 })
+    } catch {
+      return {
+        ok: false,
+        dir,
+        before,
+        after: before,
+        output: '',
+        installOut: '',
+        error: '源目录不是 git 仓库，无法自动更新（请手动 git clone 后重装）'
+      }
+    }
+    try {
+      const pull = await execFileAsync('git', ['pull', '--ff-only'], {
+        cwd: dir,
+        timeout: 60000,
+        encoding: 'utf8',
+        maxBuffer: 1024 * 1024
+      })
+      const after = readVersion(dir)
+      // 是否需要 npm install：git pull 前后对比 HEAD 看 package.json 是否变更
+      let installOut = ''
+      let npmChanged = false
+      try {
+        const { stdout } = await execFileAsync('git', ['diff', '--name-only', 'HEAD@{1}', 'HEAD'], {
+          cwd: dir,
+          timeout: 10000,
+          encoding: 'utf8'
+        })
+        npmChanged = String(stdout).split('\n').includes('package.json')
+      } catch {}
+      if (npmChanged) {
+        const r = await execFileAsync('npm', ['install'], {
+          cwd: dir,
+          timeout: 120000,
+          encoding: 'utf8',
+          maxBuffer: 4 * 1024 * 1024
+        })
+        installOut = r.stdout
+      }
+      return { ok: true, dir, before, after, output: pull.stdout, installOut, error: null }
+    } catch (err) {
+      const msg = err && err.stderr ? err.stderr : err && err.message ? err.message : String(err)
+      return { ok: false, dir, before, after: before, output: '', installOut: '', error: msg }
+    }
+  }
 }
 
 ShlService.remoteInitializers = [
   ...collectRemoteInitializer('getHistory'),
   ...collectRemoteInitializer('navigateToTurn'),
-  ...collectRemoteInitializer('getCurrentSession')
+  ...collectRemoteInitializer('getCurrentSession'),
+  ...collectRemoteInitializer('getVersion'),
+  ...collectRemoteInitializer('checkForUpdate'),
+  ...collectRemoteInitializer('applyUpdate')
 ]
 
 export default ShlService

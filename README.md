@@ -14,6 +14,7 @@
 - ✅ 仅显示真实用户请求（按事件 `source.kind === 'user'` 过滤系统注入消息）
 - ✅ 自动隐藏（可在设置「自动隐藏」开关控制）：开启时，滑轨与对话内容太近/重叠即自动隐藏（避免遮挡文字），窗口变宽或内容移开后自动恢复；基于 `elementFromPoint` 检测（滑轨 `pointer-events:none` 可"看穿"取到下方真实内容）
 - ✅ 尺寸自助微调（设置卡片滑块）：**间距**始终可调；横线模式额外可调**横线长度**，圆点模式额外可调**圆点大小**与**悬停胶囊长度**。改完实时生效并本地持久化（CSS 变量驱动：--shl-gap / --shl-dot / --shl-cap / --shl-bar）
+- ✅ 更新入口（设置卡片「更新」行）：打开设置即自动检查 GitHub Releases，有新版本提示「更新」并可一键拉取（`git pull`）；更新源为 [sunyuhuirong/shl-session-history](https://github.com/sunyuhuirong/shl-session-history)。不做更新通道/卸载（保持单卡片、最小改动）
 
 ## 文件结构
 

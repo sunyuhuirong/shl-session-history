@@ -1,86 +1,133 @@
-# Session History Locator (shl)
+# shl-session-history
 
-在 DeepSeek Harness 桌面客户端添加**会话历史请求迷你滑轨**，参考 ZCode 的交互模式：对话区左侧垂直居中的短横线，每条横线代表一条用户请求；鼠标悬停时横线变长并以浮动小窗显示该条请求的摘要，点击跳转到对应对话位置。以 **bundle npm 包**形式安装到桌面插件管理器。
+在 DeepSeek Harness 对话区左侧添加迷你历史滑轨：悬停显示摘要，点击跳转历史请求位置。
+
+## 目录
+
+- [功能](#功能)
+- [截图](#截图)
+- [安装](#安装)
+- [使用](#使用)
+- [配置](#配置)
+- [常见问题](#常见问题)
+- [架构](#架构)
+- [版本历史](#版本历史)
+- [参与贡献](#参与贡献)
+- [许可证](#许可证)
 
 ## 功能
 
-- ✅ 左侧垂直居中的迷你滑轨，每条记录 = 一条短横线
-- ✅ 样式可切换：横线 ↔ 圆点（设置页「插件配置」卡片中修改），圆点模式悬停时变长，实时生效并本地持久化
-- ✅ 插件开关：设置页可随时开启/关闭滑轨，关闭时不再渲染与拉取历史
-- ✅ 鼠标悬停：横线变长 + 以悬停处为轴心向两侧渐短渐淡（波浪渐变），并弹出带背景的浮动窗口显示完整请求摘要
-- ✅ 点击跳转：滚动到对话中对应的用户消息位置；目标轮次尚未加载时自动点击主包「加载更早」直至定位
-- ✅ 高亮跟随悬停位置（非固定高亮当前消息）
-- ✅ 2 秒自动刷新，仅数据变化时重建 DOM（不打断悬停交互）
-- ✅ 仅显示真实用户请求（按事件 `source.kind === 'user'` 过滤系统注入消息）
-- ✅ 自动隐藏（可在设置「自动隐藏」开关控制）：开启时，滑轨与对话内容太近/重叠即自动隐藏（避免遮挡文字），窗口变宽或内容移开后自动恢复；基于 `elementFromPoint` 检测（滑轨 `pointer-events:none` 可"看穿"取到下方真实内容）
-- ✅ 尺寸自助微调（设置卡片滑块）：**间距**始终可调；横线模式额外可调**横线长度**，圆点模式额外可调**圆点大小**与**悬停胶囊长度**。改完实时生效并本地持久化（CSS 变量驱动：--shl-gap / --shl-dot / --shl-cap / --shl-bar）
-- ✅ 更新入口（设置卡片「更新」行）：打开设置即自动检查 GitHub Releases，有新版本提示「更新」并可一键拉取（`git pull`）；更新源为 [sunyuhuirong/shl-session-history](https://github.com/sunyuhuirong/shl-session-history)。不做更新通道/卸载（保持单卡片、最小改动）
-
-## 文件结构
-
-```
-plugin-shl/
-├── package.json        # bundle 元数据（dsh.bundle.patch + dsh.client）
-├── cordis.patch.yml    # 注册行：- insert: - id / name
-├── src/
-│   └── index.js        # Host 端：TypertRemoteService + 手动 Remote 标记
-├── lib/
-│   └── client.js       # Client 端：__ModuleLoader__.load bundle 格式
-└── README.md
-```
-
-## 安装方式（桌面插件管理器）
-
-在插件管理器中选择「Browse folder / 安装本地文件夹」选择本目录即可。
-
-或命令行安装：
-
-```sh
-dsh plugin --profile desktop add /path/to/plugin-shl
-```
-
-## 依赖说明（重要）
-
-本插件是 **bundle 插件**，`@deepseek-ai/*` peer 依赖由 DeepSeek Harness 主应用运行时提供，**通过插件管理器安装时无需 `npm install`**，请勿在插件目录手动重装依赖（会破坏与主应用 runtime 的版本对齐）。
-
-- 不提供 `package-lock.json`：registry 上 `@deepseek-ai` 各 rc 版本间的 peer 依赖组合互相冲突（实测标准 `npm install` 报 ERESOLVE，无法独立解析整棵依赖树）。
-- 独立开发时可尝试 `npm install --legacy-peer-deps`，但解析出的版本组合可能与主应用 runtime 不一致，运行时以主应用实际提供的版本为准。
-- 升级主应用后，建议重新加载本插件并做一次 RPC 冒烟验证（三个远程方法可被 client 调用，见 `src/index.js` 头部注释）。
+- 左侧垂直居中的迷你滑轨，每条记录 = 一条短横线（或圆点）
+- 样式可切换：横线 ↔ 圆点（设置页「插件配置」卡片中修改），改完实时生效并本地持久化
+- 鼠标悬停：横线变长 + 以悬停处为轴心向两侧渐短渐淡（波浪渐变），弹出浮动窗口显示完整请求摘要
+- 点击跳转：滚动到对话中对应的用户消息位置；目标轮次未加载时自动点击「加载更早」直至定位
+- 高亮跟随悬停位置（非固定高亮当前消息）
+- 2 秒自动刷新，仅数据变化时重建 DOM（不打断悬停交互）
+- 仅显示真实用户请求（过滤系统注入消息）
+- 自动隐藏：滑轨与对话内容太近/重叠时自动隐藏，避免遮挡文字
+- 尺寸自助微调：间距 / 横线长度 / 圆点大小 / 悬停胶囊长度均可通过滑块调整
+- 更新入口：设置卡片自动检查 GitHub Releases，有新版本可一键拉取
 
 ## 截图
 
 | 截图 | 说明 |
 |------|------|
 | ![会话滑轨概览](docs/screenshots/01-overview.png) | 侧边栏会话列表中滑轨以横线形式显示各历史请求，悬停变长并弹出摘要。 |
-| ![设置面板](docs/screenshots/02-settings-panel.png) | 插件配置卡片：开关 / 样式切换 / 间距与长度微调均在「设置 → 插件」页完成，改完即时生效并本地持久化。 |
-| ![圆点模式](docs/screenshots/03-rail-dot-mode.png) | 切换到圆点样式后，滑轨变为竖向圆点，大小随会话新旧渐淡；悬停时胶囊变长（可调长度）。 |
+| ![设置面板](docs/screenshots/02-settings-panel.png) | 插件配置卡片：开关 / 样式切换 / 间距与长度微调均在「设置 → 插件」页完成。 |
+| ![圆点模式](docs/screenshots/03-rail-dot-mode.png) | 切换到圆点样式后，滑轨变为竖向圆点，大小随会话新旧渐淡；悬停时胶囊变长。 |
 
-## 版本历史
+## 安装
 
-- **v1.1.1**（2025-08-24）：修复切换会话后「间距 / 圆点大小」设置失效的 bug（内核 `StrictSessionEntry` 以 `key=sessionId` 重挂载插槽内容，挂载时未写入 CSS 变量；现改为挂载后立即调用 `applySettingsToNode()`，确保尺寸变量在每次新会话中正确应用）。
-- **v1.1.0**（2025-08-24）：新增设置卡片尺寸微调（间距 / 圆点大小 / 胶囊长度 / 横线长度）、更新入口、版本号显示。
-- **v1.0.0**：初始版本，基础滑轨功能。
+在 DeepSeek Harness 桌面客户端中，打开「插件市场」选择「Browse folder / 安装本地文件夹」，
+选择本仓库目录即可。
+
+命令行方式：
+
+```sh
+dsh plugin --profile desktop add /path/to/shl-session-history
+```
+
+> **注意**：本插件是 bundle 插件，`@deepseek-ai/*` peer 依赖由主应用运行时提供，
+> **无需 `npm install`**，请勿在插件目录手动重装依赖。
+
+## 使用
+
+安装完成后，设置页「插件 → 会话滑轨」卡片即出现。默认启用，滑轨会随会话内容同步出现。
+
+- **开启/关闭**：拨动「启用滑轨」开关
+- **切换样式**：点击「横线」或「圆点」按钮
+- **调整尺寸**：拖动对应滑块，数值即时生效并持久化到本地
+- **跳转历史**：点击滑轨任意条目，对话区滚动到对应请求位置
+
+## 配置
+
+所有配置项在设置页「插件配置 → 会话滑轨」卡片中完成：
+
+| 选项 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| 启用滑轨 | 开关 | 开 | 总开关，关闭后不渲染也不拉取历史 |
+| 自动隐藏 | 开关 | 开 | 滑轨与内容重叠时自动隐藏 |
+| 滑轨样式 | 单选 | 横线 | 横线 / 圆点两种样式 |
+| 间距 | 滑块 | 6px | 相邻条目之间的垂直间距（2–24px） |
+| 横线长度 | 滑块 | 8px | 横线模式下的条目长度（4–28px） |
+| 圆点大小 | 滑块 | 6px | 圆点模式下的直径（4–16px） |
+| 胶囊长度 | 滑块 | 18px | 圆点模式悬停时的最大长度（8–48px） |
+
+## 常见问题
+
+**Q: 切换会话后间距/圆点大小设置失效？**
+
+A: v1.1.1 已修复。此前因内核重挂载机制导致新会话节点未继承尺寸变量，现已在挂载时立即写入。如仍复现，请确认已更新至 v1.1.1。
+
+**Q: 滑轨不显示或显示为默认尺寸？**
+
+A: 检查设置页「启用滑轨」是否开启；刷新页面（Cmd+R）让最新代码生效。
+
+**Q: 如何升级插件？**
+
+A: 设置页「会话滑轨」卡片底部有「检查更新」按钮，或运行：
+```sh
+dsh plugin --profile desktop update shl-session-history
+```
 
 ## 架构
 
-- **Host 端** (`src/index.js`)：`ShlService extends TypertRemoteService`，通过 `super(ctx, 'shl')` 注册服务；用纯 JS 手动调用 `Remote('method')` 等价于 `@Remote()` 装饰器（Node 24 默认不支持 decorator 语法），标记 `getHistory` / `navigateToTurn` / `getCurrentSession` 三个远程方法。数据源：`sessionQuery.readSession(sessionId)` 读取完整事件（含 `data`），按事件 `source.kind === 'user'` 过滤出真实用户请求。同时注入 `settings` 服务，注册 settings namespace `shl-session-history`（schema: `{ enabled: bool = true, railStyle: 'bar'|'dot' = 'bar' }`），让设置页「插件配置」tab 把本插件认作可配置的已 serve namespace。
-- **Client 端** (`lib/client.js`)：`window.__ModuleLoader__.load({ id, factory })` bundle 格式，导出 `{ apply, inject }`；通过 `ctx.connection.rpc.call('/api', 'shl/<method>', { args: { request: {...} } })` 调用 host；纯 DOM + `document.createElement('style')` 注入样式与悬浮窗口（append 到 `document.body`，`position: fixed` 按滚动容器矩形计算定位）。设置（开关 / 样式）走 `ctx.settingsScope.bind({ namespace: 'shl-session-history' })` ——卡片注册到 `settings.plugin.item` slot（与终端/Agent 循环/网页搜索同处「插件配置」tab 内以可折叠卡片呈现），`ShlSettingsCard` 读 snapshot、`props.setEnabled` / `props.setRailStyle` 写回到 host settings。Host 的 settings/updated 事件通过订阅 → 同步镜像到 `localStorage`，保持 rail 渲染层从本地存储读取的兼容路径。
+**Host 端**（`src/index.js`）：`ShlService extends TypertRemoteService`，注册三个远程方法
+`getHistory` / `navigateToTurn` / `getCurrentSession`，数据源为 `sessionQuery.readSession()`，
+同时注册 settings namespace `shl-session-history` 供设置卡片读取。
 
-## RPC 接口（Host → Remote）
+**Client 端**（`lib/client.js`）：`__ModuleLoader__.load` bundle 格式，通过 RPC 调用 Host，
+纯 DOM 注入滑轨节点与悬浮窗，CSS 变量驱动尺寸（`--shl-gap` / `--shl-dot` / `--shl-cap` / `--shl-bar`）。
+设置卡片通过 `ctx.settingsScope` 订阅 Host snapshot，变更时同步镜像到 localStorage。
 
-| 方法 | 参数 | 返回值 | 说明 |
-|------|------|--------|------|
-| `getHistory` | `{ sessionId? }` | `{ items, sessionId, debug?, error? }` | 获取会话历史请求列表 |
-| `navigateToTurn` | `{ sessionId, turnIndex }` | `{ ok, eventSeq?, error? }` | 定位到指定轮次 |
-| `getCurrentSession` | 无 | `{ sessionId }` | 获取当前活跃会话 |
+## 文件结构
 
-Client 端远程调用返回包装：`{ ok: true, value }` 或 `{ ok: false, error }`。
+```
+shl-session-history/
+├── package.json           # bundle 元数据（dsh.bundle.patch + dsh.client）
+├── cordis.patch.yml       # 注册行：- insert: - id / name
+├── README.md
+├── src/
+│   └── index.js           # Host 端：TypertRemoteService + 手动 Remote 标记
+├── lib/
+│   └── client.js          # Client 端：__ModuleLoader__.load bundle 格式
+└── docs/
+    └── screenshots/       # 功能截图
+        ├── 01-overview.png
+        ├── 02-settings-panel.png
+        └── 03-rail-dot-mode.png
+```
 
-## 主题适配
+## 版本历史
 
-所有样式使用 DSH 主题 token，自动适配亮色/暗色模式（带 fallback 值）：
+- **v1.1.1** — 修复切换会话后间距/圆点大小设置失效的 bug
+- **v1.1.0** — 新增尺寸微调滑块、设置卡片版本号显示、一键更新入口
+- **v1.0.0** — 初始版本，基础滑轨功能
 
-- `--dsw-alias-bg-layer-1` / `--dsw-alias-bg-layer-2`
-- `--dsw-alias-border-l2`
-- `--dsw-alias-brand-primary`
-- `--dsw-alias-label-primary` / `--dsw-alias-label-secondary` / `--dsw-alias-label-tertiary`
+## 参与贡献
+
+欢迎提交 Issue 和 PR。开发前请先阅读 [AGENTS.md](../AGENTS.md) 了解本仓库规范。
+
+## 许可证
+
+[MIT](LICENSE)

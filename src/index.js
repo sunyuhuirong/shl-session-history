@@ -246,7 +246,12 @@ class ShlService extends TypertRemoteService {
             if (content) {
               items.push({
                 index: turnIndex,
-                summary: content.length > 200 ? content.slice(0, 200) + '...' : content
+                summary: content.length > 200 ? content.slice(0, 200) + '...' : content,
+                // 唯一定位键：事件 ID。内核客户端把用户消息节点渲染为
+                // data-chat-anchor-key = "13:input-message" + data.id
+                // （conversationContextKey 拼接），两端无损对上——跳转不再依赖
+                // 文本匹配或索引计数，重复消息也能唯一定位。
+                id: evt && evt.data && evt.data.id != null ? String(evt.data.id) : undefined
               })
               turnIndex++
             }

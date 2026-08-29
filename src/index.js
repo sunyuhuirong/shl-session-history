@@ -56,6 +56,7 @@ const name = 'shl-session-history'
 export const ShlSettingsSchema = z.object({
   enabled: z.boolean().default(true),
   railStyle: z.union(['bar', 'dot']).default('bar'),
+  railPosition: z.union(['left', 'right']).default('left'),
   autoHide: z.boolean().default(true),
   // 尺寸微调（用户自助）：gap 间距；dotSize 圆点大小；capLen 悬停胶囊长度；barLen 横线长度
   gap: z.number().default(6),
@@ -112,7 +113,7 @@ class ShlService extends TypertRemoteService {
           settingsCtx.settings.register(
             settingsNamespace('shl-session-history'),
             ShlSettingsSchema,
-            { base: { enabled: true, railStyle: 'bar', autoHide: true, gap: 6, dotSize: 6, capLen: 18, barLen: 8 } }
+            { base: { enabled: true, railStyle: 'bar', railPosition: 'left', autoHide: true, gap: 6, dotSize: 6, capLen: 18, barLen: 8 } }
           )
         } catch (err) {
           console.warn('[shl] settings namespace registration skipped:', err && err.message ? err.message : err)

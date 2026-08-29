@@ -191,16 +191,43 @@ class ShlService extends TypertRemoteService {
     return this.currentSessionId
   }
 
-  // live 会话可 O(1) 取事件数（无需克隆/落盘），用于增量判断
-  _getLiveEventCount(sessionId) {
+  // ── live 会话直读（性能关键路径）────────────────────────────────
+  // 打开中的会话在 host 内存里有活对象（sessions 服务），events 是冻结的
+  // 追加只读快照（seq 连续、按序追加）——直接扫它零克隆；而 sessionQuery
+  // readSession 每次调用要做 3 次全量 structuredClone + 逐事件校验/deepFreeze
+  // （非 live 还要解压全量 .jsonl.zstd），大会话单次可占主进程 ~2s，与 2s
+  // 轮询叠加会饿死其它插件的 RPC（如 web-ui-all 侧边栏）。因此 getHistory /
+  // navigateToTurn 一律优先走这里，仅会话未挂载时回落 readSession。
+  _getLiveSession(sessionId) {
     try {
       const sessions = this.ctx.get('sessions')
       if (sessions && typeof sessions.get === 'function') {
         const s = sessions.get(sessionId)
-        if (s && Array.isArray(s.events)) return s.events.length
+        if (s && Array.isArray(s.events)) return s
       }
     } catch {}
     return null
+  }
+
+  // 扫描 events[from..] 中的真实用户消息并追加到 items。轮次口径与
+  // navigateToTurn 一致：仅统计「真实用户 + 文本内容非空」的事件，index =
+  // 已累计条数——全量扫与后缀扫产出完全对齐，跳转索引不受增量影响。
+  _appendUserItems(events, from, items) {
+    for (let i = from; i < events.length; i++) {
+      const evt = events[i]
+      if (!this.isUserEvent(evt)) continue
+      const content = this.extractUserContent(evt)
+      if (!content) continue
+      items.push({
+        index: items.length,
+        summary: content.length > 200 ? content.slice(0, 200) + '...' : content,
+        // 唯一定位键：事件 ID。内核客户端把用户消息节点渲染为
+        // data-chat-anchor-key = "13:input-message" + data.id
+        // （conversationContextKey 拼接），两端无损对上——跳转不再依赖
+        // 文本匹配或索引计数，重复消息也能唯一定位。
+        id: evt && evt.data && evt.data.id != null ? String(evt.data.id) : undefined
+      })
+    }
   }
 
   // ── Remote 方法：获取会话历史请求列表 ────────────────────────────
@@ -222,43 +249,37 @@ class ShlService extends TypertRemoteService {
     if (!sessionId) return { items: [], sessionId: null, error: 'no session', debug }
     if (!sessionQuery) return { items: [], sessionId, error: 'sessionQuery unavailable', debug }
     try {
-      // 增量：live 会话事件数未变化时直接复用缓存，跳过 readSession 与全量重扫
-      const liveCount = this._getLiveEventCount(sessionId)
-      if (
-        this._historyCache &&
-        this._historyCache.sessionId === sessionId &&
-        liveCount !== null &&
-        this._historyCache.eventCount === liveCount
-      ) {
-        debug.eventCount = liveCount
-        debug.cached = true
-        return { items: this._historyCache.items, sessionId, debug }
+      // ── 快路径：live 会话直读内存事件 + 后缀增量扫描（零克隆，亚毫秒级）──
+      // events 为追加只读快照（seq 连续），缓存记录已扫描前缀长度 eventCount，
+      // 新事件只补扫尾部；日志变短等异常（fork/重放）走全量重扫自愈。
+      const live = this._getLiveSession(sessionId)
+      if (live) {
+        const events = live.events
+        const cache = this._historyCache
+        debug.eventCount = events.length
+        debug.live = true
+        debug.sampleTypes = events.slice(0, 6).map((e) => (e && e.type) || typeof e)
+        if (cache && cache.sessionId === sessionId && cache.eventCount <= events.length) {
+          if (cache.eventCount === events.length) {
+            debug.cached = true
+            return { items: cache.items, sessionId, debug }
+          }
+          this._appendUserItems(events, cache.eventCount, cache.items)
+          cache.eventCount = events.length
+          debug.cached = true
+          return { items: cache.items, sessionId, debug }
+        }
+        const items = []
+        this._appendUserItems(events, 0, items)
+        this._historyCache = { sessionId, eventCount: events.length, items }
+        return { items, sessionId, debug }
       }
+      // ── 慢路径：会话未挂载（罕见），readSession 全量快照 ─────────────
       const { events } = await sessionQuery.readSession(sessionId)
       debug.eventCount = Array.isArray(events) ? events.length : -1
       debug.sampleTypes = (events || []).slice(0, 6).map((e) => (e && e.type) || typeof e)
       const items = []
-      if (Array.isArray(events)) {
-        let turnIndex = 0
-        for (let i = 0; i < events.length; i++) {
-          const evt = events[i]
-          if (this.isUserEvent(evt)) {
-            const content = this.extractUserContent(evt)
-            if (content) {
-              items.push({
-                index: turnIndex,
-                summary: content.length > 200 ? content.slice(0, 200) + '...' : content,
-                // 唯一定位键：事件 ID。内核客户端把用户消息节点渲染为
-                // data-chat-anchor-key = "13:input-message" + data.id
-                // （conversationContextKey 拼接），两端无损对上——跳转不再依赖
-                // 文本匹配或索引计数，重复消息也能唯一定位。
-                id: evt && evt.data && evt.data.id != null ? String(evt.data.id) : undefined
-              })
-              turnIndex++
-            }
-          }
-        }
-      }
+      if (Array.isArray(events)) this._appendUserItems(events, 0, items)
       this._historyCache = { sessionId, eventCount: debug.eventCount, items }
       return { items, sessionId, debug }
     } catch (err) {
@@ -275,24 +296,31 @@ class ShlService extends TypertRemoteService {
     const sessionQuery = this.sessionQuery
     if (!sessionQuery) return { ok: false, error: 'sessionQuery unavailable' }
     try {
+      // 优先 live 直读（零克隆，大会话省 ~2s 主进程阻塞），未挂载才走 readSession
+      const live = this._getLiveSession(targetSession)
+      if (live) return this._locateTurn(live.events, turnIndex)
       const { events } = await sessionQuery.readSession(targetSession)
-      if (!Array.isArray(events)) return { ok: false, error: 'no events' }
-      // 轮次口径必须与 getHistory 一致：仅统计「真实用户 + 文本内容非空」的事件，
-      // 否则会话中存在无文本用户事件（如仅发图片/附件）时索引会错位。
-      let userCount = 0
-      for (let i = 0; i < events.length; i++) {
-        const evt = events[i]
-        if (!this.isUserEvent(evt)) continue
-        if (!this.extractUserContent(evt)) continue
-        if (userCount === turnIndex) {
-          return { ok: true, eventSeq: i, turnIndex }
-        }
-        userCount++
-      }
-      return { ok: false, error: 'turn not found' }
+      return this._locateTurn(events, turnIndex)
     } catch (err) {
       return { ok: false, error: String(err) }
     }
+  }
+
+  // 轮次口径必须与 getHistory 一致：仅统计「真实用户 + 文本内容非空」的事件，
+  // 否则会话中存在无文本用户事件（如仅发图片/附件）时索引会错位。
+  _locateTurn(events, turnIndex) {
+    if (!Array.isArray(events)) return { ok: false, error: 'no events' }
+    let userCount = 0
+    for (let i = 0; i < events.length; i++) {
+      const evt = events[i]
+      if (!this.isUserEvent(evt)) continue
+      if (!this.extractUserContent(evt)) continue
+      if (userCount === turnIndex) {
+        return { ok: true, eventSeq: i, turnIndex }
+      }
+      userCount++
+    }
+    return { ok: false, error: 'turn not found' }
   }
 
   // ── Remote 方法：获取当前会话 ────────────────────────────────────

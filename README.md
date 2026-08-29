@@ -23,7 +23,7 @@
 - 鼠标悬停：横线变长 + 以悬停处为轴心向两侧渐短渐淡（波浪渐变），弹出浮动窗口显示完整请求摘要
 - 点击跳转：滚动到对话中对应的用户消息位置；目标轮次未加载时自动点击「加载更早」直至定位
 - 高亮跟随悬停位置（非固定高亮当前消息）
-- 2 秒自动刷新，仅数据变化时重建 DOM（不打断悬停交互）
+- 2 秒自动刷新，仅数据变化时重建 DOM（不打断悬停交互）；页面隐藏时暂停轮询
 - 仅显示真实用户请求（过滤系统注入消息）
 - 自动隐藏：滑轨与对话内容太近/重叠时自动隐藏，避免遮挡文字
 - 空态友好提示：加载中 / 新会话邀请文案 / 异常警示色一目了然，原始错误信息仅悬停可见
@@ -97,8 +97,10 @@ dsh plugin --profile desktop update shl-session-history
 ## 架构
 
 **Host 端**（`src/index.js`）：`ShlService extends TypertRemoteService`，注册三个远程方法
-`getHistory` / `navigateToTurn` / `getCurrentSession`，数据源为 `sessionQuery.readSession()`，
-同时注册 settings namespace `shl-session-history` 供设置卡片读取。
+`getHistory` / `navigateToTurn` / `getCurrentSession`，数据源优先 **live 会话内存直读 +
+后缀增量扫描**（零克隆，生成期每次轮询只扫新增事件），仅未挂载会话回落
+`sessionQuery.readSession()` 全量快照；同时注册 settings namespace `shl-session-history`
+供设置卡片读取。
 
 **Client 端**（`lib/client.js`）：`__ModuleLoader__.load` bundle 格式，通过 RPC 调用 Host，
 纯 DOM 注入滑轨节点与悬浮窗，CSS 变量驱动尺寸（`--shl-gap` / `--shl-dot` / `--shl-cap` / `--shl-bar`）。
@@ -124,6 +126,7 @@ shl-session-history/
 
 ## 版本历史
 
+- **v1.1.8** — 性能优化：修复 2s 轮询 × `readSession` 全量快照（3 次 structuredClone + 逐事件校验/deepFreeze，非 live 还要解压全量 zstd 日志，大会话单次 ~2s 主进程 CPU）拖慢其它插件 RPC 的问题。host 端改为 **live 会话内存直读 + 后缀增量扫描**（`getHistory`/`navigateToTurn` 均优先，零克隆亚毫秒级，仅未挂载会话回落 readSession）；client 端页面隐藏时暂停轮询、滚动与弹窗检测 rAF 合帧（流式输出期间不再每个 mutation 批次做全文档 `[class*=…]` 扫描）
 - **v1.1.7** — 空态友好提示：滑轨状态从调试串升级为相位状态机（加载中 / 空会话 / 就绪 / 错误），空会话显示「发送第一条消息」引导文案，错误态 tick 变警示色、原始调试信息仅悬停可见；host 业务错误（如 sessionQuery 不可用）与「无会话」正确区分
 - **v1.1.6** — 新增「滑轨位置」设置：滑轨可停靠对话区左侧或右侧（设置卡片单选按钮，默认左侧），右侧模式下条目右对齐、横线以右缘为轴心生长、悬停摘要窗自动弹向左侧，自动隐藏的重叠检测同步按位置镜像
 - **v1.1.5** — 定位机制重构为**唯一键直连**：host 输出每条消息的事件 ID，客户端经内核 `data-chat-anchor-key`（`"13:input-message"+事件ID`）精确查找 DOM 节点——与消息内容、索引计数完全无关，**重复发送同一句话也能唯一定位**。解析链：①ID 精确直连 → ②key 后缀启发式（防内核改拼接格式）→ ③文本锚点兜底（仅无 id 老数据）→ ④回顶；分页加载中的命中判据同步改为唯一键，杜绝同文误中
